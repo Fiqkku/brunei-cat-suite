@@ -1,11 +1,14 @@
 import { useState, useEffect, useRef } from 'react';
 import CatDoodlePad from './CatDoodlePad';
+import { BRUNEI_CATALOGUE, UNIT_CONFIG } from './bruneiCatalogue';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('pantry');
   const [name, setName] = useState('');
-  const [weight, setWeight] = useState('');
+  const [qty, setQty] = useState('');
+  const [unit, setUnit] = useState('g');
   const [price, setPrice] = useState('');
+  const [showSuggestions, setShowSuggestions] = useState(false);
   const fileInputRef = useRef(null);
 
   const [pantry, setPantry] = useState(() => {
@@ -17,21 +20,41 @@ export default function App() {
     localStorage.setItem('chef_kucing_pantry', JSON.stringify(pantry));
   }, [pantry]);
 
-  const costPerGram = weight > 0 && price > 0 ? price / weight : 0;
+  const unitInfo = UNIT_CONFIG[unit] || UNIT_CONFIG.g;
+  const totalBaseQty = parseFloat(qty) > 0 ? parseFloat(qty) * unitInfo.multiplier : 0;
+  const costPerBaseUnit = totalBaseQty > 0 && parseFloat(price) > 0 ? parseFloat(price) / totalBaseQty : 0;
+
+  const filteredSuggestions = BRUNEI_CATALOGUE.filter((item) =>
+    item.name.toLowerCase().includes(name.toLowerCase())
+  );
+
+  const handleSelectSuggestion = (item) => {
+    setName(item.name);
+    setQty(String(item.qty));
+    setUnit(item.unit);
+    setPrice(item.price.toFixed(2));
+    setShowSuggestions(false);
+  };
 
   const handleSave = (e) => {
     e.preventDefault();
-    if (!name || !weight || !price) return;
+    if (!name || !qty || !price || costPerBaseUnit <= 0) return;
+
     const newItem = {
       id: Date.now(),
       name,
-      weight: parseFloat(weight),
+      qty: parseFloat(qty),
+      unit,
+      baseUnit: unitInfo.baseUnit,
+      totalBaseQty,
       price: parseFloat(price),
-      costPerGram,
+      costPerBaseUnit,
     };
+
     setPantry([newItem, ...pantry]);
     setName('');
-    setWeight('');
+    setQty('');
+    setUnit('g');
     setPrice('');
   };
 
@@ -72,7 +95,6 @@ export default function App() {
 
   return (
     <div style={{ maxWidth: 480, margin: '0 auto', padding: '20px 16px 96px' }}>
-      {/* Top App Header */}
       <header style={{ marginBottom: 18 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: '#ea580c', textTransform: 'uppercase', letterSpacing: 0.5 }}>
           Brunei Cat Suite • Beta
@@ -84,7 +106,7 @@ export default function App() {
         </h1>
       </header>
 
-      {/* TAB 1: INGREDIENT PANTRY */}
+      {/* TAB 1: INGREDIENT PANTRY WITH BRUNEI CATALOGUE & SMART UNITS */}
       {activeTab === 'pantry' && (
         <>
           <form
@@ -99,52 +121,137 @@ export default function App() {
               gap: 14,
             }}
           >
-            <div>
+            {/* Ingredient Name + Brunei Autocomplete Dropdown */}
+            <div style={{ position: 'relative' }}>
               <label style={{ display: 'block', fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
-                Ingredient Name
+                Ingredient / Item Name
               </label>
               <input
                 type="text"
-                placeholder="e.g. Anchor Butter"
+                placeholder="Tap to pick Hua Ho staples or type your own..."
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onFocus={() => setShowSuggestions(true)}
+                onBlur={() => setTimeout(() => setShowSuggestions(false), 180)}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  setShowSuggestions(true);
+                }}
+                style={{ width: '100%', padding: 12, fontSize: 16, borderRadius: 10, border: '1px solid #d1d5db' }}
+              />
+
+              {showSuggestions && filteredSuggestions.length > 0 && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: '100%',
+                    left: 0,
+                    right: 0,
+                    background: '#fff',
+                    border: '1px solid #fed7aa',
+                    borderRadius: 12,
+                    boxShadow: '0 10px 25px rgba(0,0,0,0.12)',
+                    maxHeight: 220,
+                    overflowY: 'auto',
+                    zIndex: 30,
+                    marginTop: 4,
+                  }}
+                >
+                  <div style={{ padding: '6px 12px', fontSize: 11, fontWeight: 700, color: '#9a3412', background: '#fff7ed' }}>
+                    🇧🇳 Quick-Fill Brunei Staples (Editable)
+                  </div>
+                  {filteredSuggestions.map((item, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onMouseDown={() => handleSelectSuggestion(item)}
+                      style={{
+                        width: '100%',
+                        textAlign: 'left',
+                        padding: '10px 12px',
+                        background: 'none',
+                        border: 'none',
+                        borderBottom: '1px solid #f3f4f6',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        fontSize: 14,
+                      }}
+                    >
+                      <span style={{ fontWeight: 500, color: '#111827' }}>{item.name}</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: '#ea580c', whiteSpace: 'nowrap', marginLeft: 8 }}>
+                        ~${item.price.toFixed(2)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Quantity + Flexible Unit Dropdown */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div>
+                <label style={{ display: 'block', fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
+                  Pack Size / Qty
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  placeholder="e.g. 250 or 1"
+                  value={qty}
+                  onChange={(e) => setQty(e.target.value)}
+                  style={{ width: '100%', padding: 12, fontSize: 16, borderRadius: 10, border: '1px solid #d1d5db' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
+                  Unit
+                </label>
+                <select
+                  value={unit}
+                  onChange={(e) => setUnit(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: 12,
+                    fontSize: 16,
+                    borderRadius: 10,
+                    border: '1px solid #d1d5db',
+                    background: '#fff',
+                  }}
+                >
+                  {Object.entries(UNIT_CONFIG).map(([key, cfg]) => (
+                    <option key={key} value={key}>
+                      {cfg.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Price Input */}
+            <div>
+              <label style={{ display: 'block', fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
+                Price Paid (BND $)
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                placeholder="e.g. 4.50"
+                value={price}
+                onChange={(e) => setPrice(e.target.value)}
                 style={{ width: '100%', padding: 12, fontSize: 16, borderRadius: 10, border: '1px solid #d1d5db' }}
               />
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <div>
-                <label style={{ display: 'block', fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
-                  Weight (grams)
-                </label>
-                <input
-                  type="number"
-                  placeholder="e.g. 250"
-                  value={weight}
-                  onChange={(e) => setWeight(e.target.value)}
-                  style={{ width: '100%', padding: 12, fontSize: 16, borderRadius: 10, border: '1px solid #d1d5db' }}
-                />
-              </div>
-
-              <div>
-                <label style={{ display: 'block', fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
-                  Price (BND $)
-                </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  placeholder="e.g. 4.50"
-                  value={price}
-                  onChange={(e) => setPrice(e.target.value)}
-                  style={{ width: '100%', padding: 12, fontSize: 16, borderRadius: 10, border: '1px solid #d1d5db' }}
-                />
-              </div>
-            </div>
-
+            {/* Live Unit Cost Preview */}
             <div style={{ padding: 14, background: '#fff7ed', borderRadius: 12, border: '1px solid #fed7aa' }}>
-              <div style={{ fontSize: 13, color: '#9a3412' }}>{name || 'Ingredient'} cost per gram:</div>
+              <div style={{ fontSize: 13, color: '#9a3412' }}>
+                {name || 'Item'} ({totalBaseQty > 0 ? `${totalBaseQty.toLocaleString()} ${unitInfo.baseUnit}` : `per ${unitInfo.baseUnit}`}):
+              </div>
               <div style={{ fontSize: 24, fontWeight: 800, color: '#c2410c' }}>
-                BND ${costPerGram.toFixed(4)} <span style={{ fontSize: 14, fontWeight: 400 }}>/ g</span>
+                BND ${costPerBaseUnit.toFixed(4)}{' '}
+                <span style={{ fontSize: 14, fontWeight: 400 }}>/ {unitInfo.baseUnit}</span>
               </div>
             </div>
 
@@ -171,44 +278,52 @@ export default function App() {
                 Saved Ingredients ({pantry.length})
               </h2>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {pantry.map((item) => (
-                  <div
-                    key={item.id}
-                    style={{
-                      background: '#fff',
-                      padding: 14,
-                      borderRadius: 12,
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      boxShadow: '0 1px 4px rgba(0,0,0,0.05)',
-                    }}
-                  >
-                    <div>
-                      <div style={{ fontWeight: 600, fontSize: 16 }}>{item.name}</div>
-                      <div style={{ fontSize: 13, color: '#6b7280' }}>
-                        {item.weight}g for BND ${item.price.toFixed(2)} •{' '}
-                        <strong>${item.costPerGram.toFixed(4)}/g</strong>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => handleDelete(item.id)}
+                {pantry.map((item) => {
+                  const baseUnit = item.baseUnit || 'g';
+                  const unitRate = item.costPerBaseUnit ?? item.costPerGram ?? 0;
+                  const displayQty = item.qty ? `${item.qty} ${item.unit}` : `${item.weight}g`;
+
+                  return (
+                    <div
+                      key={item.id}
                       style={{
-                        minHeight: 40,
-                        background: '#fee2e2',
-                        color: '#b91c1c',
-                        border: 'none',
-                        padding: '8px 12px',
-                        borderRadius: 8,
-                        fontSize: 14,
-                        fontWeight: 600,
-                        cursor: 'pointer',
+                        background: '#fff',
+                        padding: 14,
+                        borderRadius: 12,
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        boxShadow: '0 1px 4px rgba(0,0,0,0.05)',
                       }}
                     >
-                      Delete
-                    </button>
-                  </div>
-                ))}
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: 16 }}>{item.name}</div>
+                        <div style={{ fontSize: 13, color: '#6b7280' }}>
+                          {displayQty} for BND ${item.price.toFixed(2)} •{' '}
+                          <strong>
+                            ${unitRate.toFixed(4)}/{baseUnit}
+                          </strong>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleDelete(item.id)}
+                        style={{
+                          minHeight: 40,
+                          background: '#fee2e2',
+                          color: '#b91c1c',
+                          border: 'none',
+                          padding: '8px 12px',
+                          borderRadius: 8,
+                          fontSize: 14,
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
