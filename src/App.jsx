@@ -2,6 +2,29 @@ import { useState, useEffect, useRef } from 'react';
 import CatDoodlePad from './CatDoodlePad';
 import { BRUNEI_CATALOGUE, UNIT_CONFIG } from './bruneiCatalogue';
 
+// 👇 PASTE YOUR PUBLISHED GOOGLE SHEET CSV LINK INSIDE THE QUOTES BELOW:
+const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQhRAOL3BxRNRd300orqT1ATx_gcH6SEH9MYdmMM4TWOIvPt4LZ3rz8Q55UeXD360tgz4hR5Rk11vKa/pub?gid=0&single=true&output=csv';
+
+// Simple CSV parser that handles commas inside quotes cleanly
+function parseCatalogueCSV(csvText) {
+  const lines = csvText.trim().split(/\r?\n/);
+  if (lines.length < 2) return [];
+  return lines
+    .slice(1)
+    .map((line) => {
+      const cols = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map((c) => c.replace(/^"|"$/g, '').trim());
+      const [name, qty, unit, price] = cols;
+      if (!name || !qty || !unit || !price || !UNIT_CONFIG[unit]) return null;
+      return {
+        name,
+        qty: parseFloat(qty),
+        unit,
+        price: parseFloat(price),
+      };
+    })
+    .filter(Boolean);
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('pantry');
   const [name, setName] = useState('');
@@ -10,6 +33,29 @@ export default function App() {
   const [price, setPrice] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const fileInputRef = useRef(null);
+
+  // Live Catalogue state (loads cached sheet data first, falls back to built-in list)
+  const [catalogue, setCatalogue] = useState(() => {
+    const cached = localStorage.getItem('chef_kucing_catalogue_cache');
+    return cached ? JSON.parse(cached) : BRUNEI_CATALOGUE;
+  });
+
+  // Fetch latest Google Sheet rows in the background whenever online
+  useEffect(() => {
+    if (!SHEET_CSV_URL) return;
+    fetch(SHEET_CSV_URL)
+      .then((res) => res.text())
+      .then((csvText) => {
+        const parsed = parseCatalogueCSV(csvText);
+        if (parsed.length > 0) {
+          setCatalogue(parsed);
+          localStorage.setItem('chef_kucing_catalogue_cache', JSON.stringify(parsed));
+        }
+      })
+      .catch(() => {
+        // Offline or network hiccup — silently keeps using cached catalogue!
+      });
+  }, []);
 
   const [pantry, setPantry] = useState(() => {
     const saved = localStorage.getItem('chef_kucing_pantry');
@@ -24,7 +70,7 @@ export default function App() {
   const totalBaseQty = parseFloat(qty) > 0 ? parseFloat(qty) * unitInfo.multiplier : 0;
   const costPerBaseUnit = totalBaseQty > 0 && parseFloat(price) > 0 ? parseFloat(price) / totalBaseQty : 0;
 
-  const filteredSuggestions = BRUNEI_CATALOGUE.filter((item) =>
+  const filteredSuggestions = catalogue.filter((item) =>
     item.name.toLowerCase().includes(name.toLowerCase())
   );
 
@@ -106,7 +152,7 @@ export default function App() {
         </h1>
       </header>
 
-      {/* TAB 1: INGREDIENT PANTRY WITH BRUNEI CATALOGUE & SMART UNITS */}
+      {/* TAB 1: INGREDIENT PANTRY */}
       {activeTab === 'pantry' && (
         <>
           <form
@@ -121,14 +167,13 @@ export default function App() {
               gap: 14,
             }}
           >
-            {/* Ingredient Name + Brunei Autocomplete Dropdown */}
             <div style={{ position: 'relative' }}>
               <label style={{ display: 'block', fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
                 Ingredient / Item Name
               </label>
               <input
                 type="text"
-                placeholder="Tap to pick Hua Ho staples or type your own..."
+                placeholder="Tap to pick Brunei staples or type your own..."
                 value={name}
                 onFocus={() => setShowSuggestions(true)}
                 onBlur={() => setTimeout(() => setShowSuggestions(false), 180)}
@@ -157,7 +202,7 @@ export default function App() {
                   }}
                 >
                   <div style={{ padding: '6px 12px', fontSize: 11, fontWeight: 700, color: '#9a3412', background: '#fff7ed' }}>
-                    🇧🇳 Quick-Fill Brunei Staples (Editable)
+                    🇧🇳 Quick-Fill Brunei Staples ({catalogue.length} items)
                   </div>
                   {filteredSuggestions.map((item, idx) => (
                     <button
@@ -188,7 +233,6 @@ export default function App() {
               )}
             </div>
 
-            {/* Quantity + Flexible Unit Dropdown */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               <div>
                 <label style={{ display: 'block', fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
@@ -229,7 +273,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Price Input */}
             <div>
               <label style={{ display: 'block', fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
                 Price Paid (BND $)
@@ -244,7 +287,6 @@ export default function App() {
               />
             </div>
 
-            {/* Live Unit Cost Preview */}
             <div style={{ padding: 14, background: '#fff7ed', borderRadius: 12, border: '1px solid #fed7aa' }}>
               <div style={{ fontSize: 13, color: '#9a3412' }}>
                 {name || 'Item'} ({totalBaseQty > 0 ? `${totalBaseQty.toLocaleString()} ${unitInfo.baseUnit}` : `per ${unitInfo.baseUnit}`}):
