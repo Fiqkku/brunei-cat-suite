@@ -5,7 +5,6 @@ import { BRUNEI_CATALOGUE, UNIT_CONFIG } from './bruneiCatalogue';
 // 👇 PASTE YOUR PUBLISHED GOOGLE SHEET CSV LINK INSIDE THE QUOTES BELOW:
 const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQhRAOL3BxRNRd300orqT1ATx_gcH6SEH9MYdmMM4TWOIvPt4LZ3rz8Q55UeXD360tgz4hR5Rk11vKa/pub?gid=0&single=true&output=csv';
 
-// Simple CSV parser that handles commas inside quotes cleanly
 function parseCatalogueCSV(csvText) {
   const lines = csvText.trim().split(/\r?\n/);
   if (lines.length < 2) return [];
@@ -27,6 +26,8 @@ function parseCatalogueCSV(csvText) {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('pantry');
+
+  // --- PANTRY STATE ---
   const [name, setName] = useState('');
   const [qty, setQty] = useState('');
   const [unit, setUnit] = useState('g');
@@ -34,13 +35,11 @@ export default function App() {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const fileInputRef = useRef(null);
 
-  // Live Catalogue state (loads cached sheet data first, falls back to built-in list)
   const [catalogue, setCatalogue] = useState(() => {
     const cached = localStorage.getItem('chef_kucing_catalogue_cache');
     return cached ? JSON.parse(cached) : BRUNEI_CATALOGUE;
   });
 
-  // Fetch latest Google Sheet rows in the background whenever online
   useEffect(() => {
     if (!SHEET_CSV_URL) return;
     fetch(SHEET_CSV_URL)
@@ -52,9 +51,7 @@ export default function App() {
           localStorage.setItem('chef_kucing_catalogue_cache', JSON.stringify(parsed));
         }
       })
-      .catch(() => {
-        // Offline or network hiccup — silently keeps using cached catalogue!
-      });
+      .catch(() => {});
   }, []);
 
   const [pantry, setPantry] = useState(() => {
@@ -66,6 +63,25 @@ export default function App() {
     localStorage.setItem('chef_kucing_pantry', JSON.stringify(pantry));
   }, [pantry]);
 
+  // --- RECIPE & PRICING STATE ---
+  const [recipes, setRecipes] = useState(() => {
+    const saved = localStorage.getItem('chef_kucing_recipes');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('chef_kucing_recipes', JSON.stringify(recipes));
+  }, [recipes]);
+
+  const [recipeName, setRecipeName] = useState('');
+  const [batchYield, setBatchYield] = useState('12');
+  const [overheadCost, setOverheadCost] = useState('');
+  const [selectedPantryId, setSelectedPantryId] = useState('');
+  const [amountUsed, setAmountUsed] = useState('');
+  const [recipeItems, setRecipeItems] = useState([]);
+  const [customSellPrice, setCustomSellPrice] = useState('');
+
+  // --- PANTRY HANDLERS ---
   const unitInfo = UNIT_CONFIG[unit] || UNIT_CONFIG.g;
   const totalBaseQty = parseFloat(qty) > 0 ? parseFloat(qty) * unitInfo.multiplier : 0;
   const costPerBaseUnit = totalBaseQty > 0 && parseFloat(price) > 0 ? parseFloat(price) / totalBaseQty : 0;
@@ -82,7 +98,7 @@ export default function App() {
     setShowSuggestions(false);
   };
 
-  const handleSave = (e) => {
+  const handleSavePantry = (e) => {
     e.preventDefault();
     if (!name || !qty || !price || costPerBaseUnit <= 0) return;
 
@@ -104,12 +120,73 @@ export default function App() {
     setPrice('');
   };
 
-  const handleDelete = (id) => {
+  const handleDeletePantry = (id) => {
     setPantry(pantry.filter((item) => item.id !== id));
   };
 
+  // --- RECIPE BUILDER & MARGIN CALCULATIONS ---
+  const activePantryItem = pantry.find((p) => String(p.id) === String(selectedPantryId));
+
+  const handleAddIngredientToRecipe = () => {
+    if (!activePantryItem || !amountUsed || parseFloat(amountUsed) <= 0) return;
+    const rate = activePantryItem.costPerBaseUnit ?? activePantryItem.costPerGram ?? 0;
+    const baseUnit = activePantryItem.baseUnit || 'g';
+    const qtyNum = parseFloat(amountUsed);
+
+    setRecipeItems([
+      ...recipeItems,
+      {
+        id: Date.now(),
+        pantryId: activePantryItem.id,
+        name: activePantryItem.name,
+        amountUsed: qtyNum,
+        baseUnit,
+        lineCost: qtyNum * rate,
+      },
+    ]);
+    setAmountUsed('');
+  };
+
+  const handleRemoveRecipeItem = (id) => {
+    setRecipeItems(recipeItems.filter((item) => item.id !== id));
+  };
+
+  const ingredientsTotal = recipeItems.reduce((sum, item) => sum + item.lineCost, 0);
+  const extraCostNum = parseFloat(overheadCost) > 0 ? parseFloat(overheadCost) : 0;
+  const totalBatchCost = ingredientsTotal + extraCostNum;
+  const yieldNum = parseFloat(batchYield) > 0 ? parseFloat(batchYield) : 1;
+  const costPerPiece = totalBatchCost / yieldNum;
+
+  const handleSaveRecipe = (e) => {
+    e.preventDefault();
+    if (!recipeName.trim() || recipeItems.length === 0) return;
+
+    const newRecipe = {
+      id: Date.now(),
+      name: recipeName.trim(),
+      batchYield: yieldNum,
+      overheadCost: extraCostNum,
+      items: recipeItems,
+      totalBatchCost,
+      costPerPiece,
+      suggestedSellPrice: parseFloat(customSellPrice) > 0 ? parseFloat(customSellPrice) : costPerPiece * 1.5,
+    };
+
+    setRecipes([newRecipe, ...recipes]);
+    setRecipeName('');
+    setBatchYield('12');
+    setOverheadCost('');
+    setRecipeItems([]);
+    setCustomSellPrice('');
+  };
+
+  const handleDeleteRecipe = (id) => {
+    setRecipes(recipes.filter((r) => r.id !== id));
+  };
+
+  // --- BACKUP HANDLERS ---
   const handleExportBackup = () => {
-    const dataStr = JSON.stringify({ pantry, exportedAt: new Date().toISOString() }, null, 2);
+    const dataStr = JSON.stringify({ pantry, recipes, exportedAt: new Date().toISOString() }, null, 2);
     const blob = new Blob([dataStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -128,7 +205,8 @@ export default function App() {
         const parsed = JSON.parse(event.target.result);
         if (Array.isArray(parsed.pantry)) {
           setPantry(parsed.pantry);
-          alert(`Restored ${parsed.pantry.length} ingredients successfully!`);
+          if (Array.isArray(parsed.recipes)) setRecipes(parsed.recipes);
+          alert(`Restored ${parsed.pantry.length} ingredients & ${parsed.recipes?.length || 0} recipes!`);
         } else {
           alert('Invalid backup file.');
         }
@@ -139,6 +217,17 @@ export default function App() {
     reader.readAsText(file);
   };
 
+  // Margin tiers for Screen 3
+  const marginTiers = [
+    { label: '30% Margin', sub: 'Budget / Wholesale', multiplier: 1.3 },
+    { label: '50% Margin', sub: 'Standard Home Biz', multiplier: 1.5 },
+    { label: '100% Margin', sub: '2x Cost / Café', multiplier: 2.0 },
+  ];
+
+  const activeSellPrice = parseFloat(customSellPrice) > 0 ? parseFloat(customSellPrice) : costPerPiece * 1.5;
+  const profitPerPiece = activeSellPrice - costPerPiece;
+  const profitPerBatch = profitPerPiece * yieldNum;
+
   return (
     <div style={{ maxWidth: 480, margin: '0 auto', padding: '20px 16px 96px' }}>
       <header style={{ marginBottom: 18 }}>
@@ -147,16 +236,17 @@ export default function App() {
         </div>
         <h1 style={{ fontSize: 24, fontWeight: 800, color: '#111827' }}>
           {activeTab === 'pantry' && '🐱 Chef Kucing: Pantry'}
+          {activeTab === 'recipes' && '🧁 Recipe & Profit Calc'}
           {activeTab === 'doodle' && '🐾 Cat Doodle Club'}
           {activeTab === 'backup' && '💾 Data & Backup'}
         </h1>
       </header>
 
-      {/* TAB 1: INGREDIENT PANTRY */}
+      {/* ==================== TAB 1: INGREDIENT PANTRY ==================== */}
       {activeTab === 'pantry' && (
         <>
           <form
-            onSubmit={handleSave}
+            onSubmit={handleSavePantry}
             style={{
               background: '#fff',
               padding: 18,
@@ -348,7 +438,7 @@ export default function App() {
                         </div>
                       </div>
                       <button
-                        onClick={() => handleDelete(item.id)}
+                        onClick={() => handleDeletePantry(item.id)}
                         style={{
                           minHeight: 40,
                           background: '#fee2e2',
@@ -372,15 +462,366 @@ export default function App() {
         </>
       )}
 
-      {/* TAB 2: CAT DOODLE PAD */}
+      {/* ==================== TAB 2: RECIPE BUILDER & PROFIT CALCULATOR ==================== */}
+      {activeTab === 'recipes' && (
+        <>
+          {pantry.length === 0 ? (
+            <div style={{ background: '#fff', padding: 22, borderRadius: 16, textAlign: 'center', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
+              <div style={{ fontSize: 36, marginBottom: 8 }}>🥣</div>
+              <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 6 }}>Your Pantry is Empty</h2>
+              <p style={{ fontSize: 14, color: '#6b7280', marginBottom: 16 }}>
+                Add at least 1 ingredient in your Pantry first so you can build recipes and calculate profits!
+              </p>
+              <button
+                type="button"
+                onClick={() => setActiveTab('pantry')}
+                style={{
+                  minHeight: 48,
+                  padding: '0 20px',
+                  background: '#ea580c',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 12,
+                  fontSize: 15,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Go to Pantry →
+              </button>
+            </div>
+          ) : (
+            <form
+              onSubmit={handleSaveRecipe}
+              style={{
+                background: '#fff',
+                padding: 18,
+                borderRadius: 16,
+                boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 16,
+              }}
+            >
+              {/* SCREEN 2: RECIPE DETAILS */}
+              <div>
+                <label style={{ display: 'block', fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
+                  Recipe / Menu Name
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Choc Chip Cookies or Iced Matcha"
+                  value={recipeName}
+                  onChange={(e) => setRecipeName(e.target.value)}
+                  style={{ width: '100%', padding: 12, fontSize: 16, borderRadius: 10, border: '1px solid #d1d5db' }}
+                />
+              </div>
+
+              {/* Pick Ingredient from Pantry */}
+              <div style={{ background: '#f9fafb', padding: 14, borderRadius: 12, border: '1px solid #e5e7eb' }}>
+                <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10, color: '#111827' }}>
+                  1. Add Ingredients Used in This Batch
+                </div>
+
+                <select
+                  value={selectedPantryId}
+                  onChange={(e) => setSelectedPantryId(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: 12,
+                    fontSize: 16,
+                    borderRadius: 10,
+                    border: '1px solid #d1d5db',
+                    background: '#fff',
+                    marginBottom: 10,
+                  }}
+                >
+                  <option value="">-- Choose from My Pantry --</option>
+                  {pantry.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name} (${(item.costPerBaseUnit ?? item.costPerGram ?? 0).toFixed(4)}/{item.baseUnit || 'g'})
+                    </option>
+                  ))}
+                </select>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 8 }}>
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder={
+                      activePantryItem
+                        ? `Amount used (${activePantryItem.baseUnit || 'g'})`
+                        : 'Amount used'
+                    }
+                    value={amountUsed}
+                    onChange={(e) => setAmountUsed(e.target.value)}
+                    style={{ width: '100%', padding: 12, fontSize: 16, borderRadius: 10, border: '1px solid #d1d5db' }}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddIngredientToRecipe}
+                    style={{
+                      minHeight: 48,
+                      background: '#111827',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: 10,
+                      fontWeight: 700,
+                      fontSize: 15,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    + Add
+                  </button>
+                </div>
+
+                {/* List of Added Recipe Ingredients */}
+                {recipeItems.length > 0 && (
+                  <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {recipeItems.map((item) => (
+                      <div
+                        key={item.id}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          background: '#fff',
+                          padding: '8px 10px',
+                          borderRadius: 8,
+                          border: '1px solid #e5e7eb',
+                          fontSize: 14,
+                        }}
+                      >
+                        <div>
+                          <span style={{ fontWeight: 600 }}>{item.name}</span>{' '}
+                          <span style={{ color: '#6b7280' }}>
+                            ({item.amountUsed} {item.baseUnit})
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontWeight: 700, color: '#ea580c' }}>
+                            ${item.lineCost.toFixed(2)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveRecipeItem(item.id)}
+                            style={{
+                              background: '#fee2e2',
+                              color: '#b91c1c',
+                              border: 'none',
+                              borderRadius: 6,
+                              padding: '4px 8px',
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                            }}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Extra Costs & Batch Yield */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div>
+                  <label style={{ display: 'block', fontWeight: 600, fontSize: 13, marginBottom: 4 }}>
+                    Packaging / Gas ($)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="e.g. 2.00"
+                    value={overheadCost}
+                    onChange={(e) => setOverheadCost(e.target.value)}
+                    style={{ width: '100%', padding: 12, fontSize: 16, borderRadius: 10, border: '1px solid #d1d5db' }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontWeight: 600, fontSize: 13, marginBottom: 4 }}>
+                    Batch Yield (pcs/cups)
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    placeholder="e.g. 24"
+                    value={batchYield}
+                    onChange={(e) => setBatchYield(e.target.value)}
+                    style={{ width: '100%', padding: 12, fontSize: 16, borderRadius: 10, border: '1px solid #d1d5db' }}
+                  />
+                </div>
+              </div>
+
+              {/* ==================== SCREEN 3: SELLING PRICE & PROFIT MARGIN CALCULATOR ==================== */}
+              <div style={{ background: '#fff7ed', padding: 16, borderRadius: 14, border: '1px solid #fed7aa' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 14, color: '#9a3412' }}>
+                  <span>Total Batch Cost:</span>
+                  <strong>BND ${totalBatchCost.toFixed(2)}</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 14 }}>
+                  <span style={{ fontSize: 15, fontWeight: 700, color: '#7c2d12' }}>Cost per Piece / Cup:</span>
+                  <span style={{ fontSize: 26, fontWeight: 800, color: '#c2410c' }}>
+                    BND ${costPerPiece.toFixed(2)}
+                  </span>
+                </div>
+
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#9a3412', marginBottom: 8, textTransform: 'uppercase' }}>
+                  Tap a Suggested Selling Price:
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 14 }}>
+                  {marginTiers.map((tier) => {
+                    const suggested = costPerPiece * tier.multiplier;
+                    return (
+                      <button
+                        key={tier.label}
+                        type="button"
+                        onClick={() => setCustomSellPrice(suggested.toFixed(2))}
+                        style={{
+                          background: '#fff',
+                          border: '1px solid #fdba74',
+                          borderRadius: 10,
+                          padding: '8px 6px',
+                          textAlign: 'center',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <div style={{ fontSize: 11, fontWeight: 700, color: '#ea580c' }}>{tier.label}</div>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: '#111827', margin: '2px 0' }}>
+                          ${suggested.toFixed(2)}
+                        </div>
+                        <div style={{ fontSize: 10, color: '#6b7280' }}>{tier.sub}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontWeight: 600, fontSize: 13, color: '#7c2d12', marginBottom: 4 }}>
+                    Your Selling Price per Piece (BND $)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.05"
+                    placeholder={`e.g. ${(costPerPiece * 1.5).toFixed(2)}`}
+                    value={customSellPrice}
+                    onChange={(e) => setCustomSellPrice(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: 12,
+                      fontSize: 16,
+                      borderRadius: 10,
+                      border: '1px solid #fdba74',
+                      background: '#fff',
+                    }}
+                  />
+                </div>
+
+                {totalBatchCost > 0 && (
+                  <div
+                    style={{
+                      marginTop: 12,
+                      padding: 10,
+                      background: profitPerPiece >= 0 ? '#dcfce7' : '#fee2e2',
+                      borderRadius: 10,
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      fontSize: 14,
+                      fontWeight: 700,
+                      color: profitPerPiece >= 0 ? '#166534' : '#991b1b',
+                    }}
+                  >
+                    <span>Net Profit: ${profitPerPiece.toFixed(2)} / pc</span>
+                    <span>${profitPerBatch.toFixed(2)} / batch</span>
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="submit"
+                style={{
+                  minHeight: 48,
+                  fontSize: 16,
+                  fontWeight: 700,
+                  background: '#ea580c',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 12,
+                  cursor: 'pointer',
+                }}
+              >
+                💾 Save Recipe Card
+              </button>
+            </form>
+          )}
+
+          {/* SAVED RECIPES LIST */}
+          {recipes.length > 0 && (
+            <div style={{ marginTop: 24 }}>
+              <h2 style={{ fontSize: 17, fontWeight: 700, marginBottom: 10 }}>
+                Saved Recipes ({recipes.length})
+              </h2>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {recipes.map((r) => {
+                  const netProfitBatch = (r.suggestedSellPrice - r.costPerPiece) * r.batchYield;
+                  return (
+                    <div
+                      key={r.id}
+                      style={{
+                        background: '#fff',
+                        padding: 14,
+                        borderRadius: 12,
+                        boxShadow: '0 1px 4px rgba(0,0,0,0.05)',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                        <div>
+                          <div style={{ fontWeight: 700, fontSize: 16 }}>{r.name}</div>
+                          <div style={{ fontSize: 13, color: '#6b7280', marginTop: 2 }}>
+                            Makes {r.batchYield} pcs • Cost: <strong>${r.costPerPiece.toFixed(2)}/pc</strong>
+                          </div>
+                          <div style={{ fontSize: 13, color: '#166534', fontWeight: 600, marginTop: 4 }}>
+                            Sell @ BND ${r.suggestedSellPrice.toFixed(2)} → Profit: +${netProfitBatch.toFixed(2)}/batch
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleDeleteRecipe(r.id)}
+                          style={{
+                            minHeight: 36,
+                            background: '#fee2e2',
+                            color: '#b91c1c',
+                            border: 'none',
+                            padding: '6px 10px',
+                            borderRadius: 8,
+                            fontSize: 13,
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ==================== TAB 3: CAT DOODLE PAD ==================== */}
       {activeTab === 'doodle' && <CatDoodlePad />}
 
-      {/* TAB 3: EXPORT / RESTORE BACKUP */}
+      {/* ==================== TAB 4: EXPORT / RESTORE BACKUP ==================== */}
       {activeTab === 'backup' && (
         <div style={{ background: '#fff', padding: 18, borderRadius: 16, boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
           <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 6 }}>Keep Your Data Safe</h2>
           <p style={{ fontSize: 14, color: '#6b7280', marginBottom: 18 }}>
-            Your ingredients are saved offline on this device. Download a backup file anytime so you can restore it on a new phone.
+            Your ingredients and saved recipes stay offline on this device. Download a backup file anytime so you can restore it on a new phone.
           </p>
 
           <button
@@ -429,7 +870,7 @@ export default function App() {
         </div>
       )}
 
-      {/* MOBILE-FIRST BOTTOM NAVIGATION BAR */}
+      {/* ==================== MOBILE-FIRST BOTTOM NAVIGATION BAR ==================== */}
       <nav
         style={{
           position: 'fixed',
@@ -443,9 +884,10 @@ export default function App() {
           zIndex: 50,
         }}
       >
-        <div style={{ maxWidth: 480, width: '100%', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr' }}>
+        <div style={{ maxWidth: 480, width: '100%', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr' }}>
           {[
             { id: 'pantry', icon: '🥣', label: 'Pantry' },
+            { id: 'recipes', icon: '🧁', label: 'Recipes' },
             { id: 'doodle', icon: '🎨', label: 'Cat Pad' },
             { id: 'backup', icon: '💾', label: 'Backup' },
           ].map((tab) => (
@@ -460,7 +902,7 @@ export default function App() {
                 borderTop: activeTab === tab.id ? '3px solid #ea580c' : '3px solid transparent',
                 color: activeTab === tab.id ? '#ea580c' : '#6b7280',
                 fontWeight: activeTab === tab.id ? 700 : 500,
-                fontSize: 13,
+                fontSize: 12,
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
